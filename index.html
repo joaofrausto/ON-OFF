@@ -30,10 +30,21 @@
 <header class="sticky top-0 z-40 bg-white/90 dark:bg-slate-800/90 backdrop-blur border-b border-slate-200 dark:border-slate-700">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
     <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-blue-600 flex items-center justify-center text-white text-xl font-bold shadow">⚡</div>
+      <!-- Logo Grupo DPSP (SVG inline para manter arquivo único) -->
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 rounded-xl shadow" aria-label="Grupo DPSP">
+        <rect width="100" height="100" rx="14" fill="#1e2a3e"/>
+        <!-- Cápsula -->
+        <g transform="translate(50 30) rotate(-18)">
+          <rect x="-22" y="-7" width="22" height="14" rx="7" fill="#ffffff"/>
+          <rect x="0"   y="-7" width="22" height="14" rx="7" fill="#e63946"/>
+          <line x1="0" y1="-7" x2="0" y2="7" stroke="#1e2a3e" stroke-width="1.5"/>
+        </g>
+        <text x="50" y="62" font-size="11" font-weight="700" text-anchor="middle" fill="#ffffff" font-family="Inter, system-ui, sans-serif" letter-spacing="1">GRUPO</text>
+        <text x="50" y="88" font-size="24" font-weight="900" text-anchor="middle" fill="#ffffff" font-family="Inter, system-ui, sans-serif" letter-spacing="0.5">DPSP</text>
+      </svg>
       <div>
         <h1 class="text-lg sm:text-xl font-bold leading-tight">Painel de Status das Lojas</h1>
-        <p class="text-xs text-slate-500 dark:text-slate-400">Monitoramento via Redash</p>
+        <p class="text-xs text-slate-500 dark:text-slate-400">Grupo DPSP — Monitoramento via Redash</p>
       </div>
     </div>
     <div class="flex items-center gap-2">
@@ -107,7 +118,7 @@
       </div>
       <div class="bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm lg:col-span-2">
         <h3 class="font-semibold mb-3">Mudanças recentes (últimas 24h)</h3>
-        <canvas id="chartTimelineMini" height="220"></canvas>
+        <div class="h-32"><canvas id="chartTimelineMini"></canvas></div>
       </div>
     </div>
 
@@ -199,6 +210,11 @@ sao_paulo,900170951,"Drogaria São Paulo, 185",true,false</pre>
           <select id="filterType" class="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
             <option value="all">Todos os tipos</option>
           </select>
+          <select id="filterCategory" class="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
+            <option value="all">Todas as categorias</option>
+            <option value="Loja Pai">Loja Pai</option>
+            <option value="Loja Filha">Loja Filha</option>
+          </select>
         </div>
         <div class="flex gap-2">
           <button id="btnExportCSV"  class="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 text-sm">📄 CSV</button>
@@ -212,6 +228,7 @@ sao_paulo,900170951,"Drogaria São Paulo, 185",true,false</pre>
               <th class="px-4 py-3 text-left cursor-pointer" data-sort="store_id">Store ID ⇅</th>
               <th class="px-4 py-3 text-left cursor-pointer" data-sort="store_name">Nome ⇅</th>
               <th class="px-4 py-3 text-left cursor-pointer" data-sort="store_type">Tipo ⇅</th>
+              <th class="px-4 py-3 text-left">Categoria</th>
               <th class="px-4 py-3 text-left cursor-pointer" data-sort="status">CMS ⇅</th>
               <th class="px-4 py-3 text-left">Sugerido</th>
               <th class="px-4 py-3 text-left">Status anterior</th>
@@ -222,7 +239,7 @@ sao_paulo,900170951,"Drogaria São Paulo, 185",true,false</pre>
             </tr>
           </thead>
           <tbody id="storesTbody">
-            <tr><td colspan="10" class="text-center py-12 text-slate-400">Carregue um arquivo em "📤 Upload" para começar.</td></tr>
+            <tr><td colspan="11" class="text-center py-12 text-slate-400">Carregue um arquivo em "📤 Upload" para começar.</td></tr>
           </tbody>
         </table>
       </div>
@@ -423,7 +440,7 @@ const state = {
   },
   stores: [], history: [], daily: {}, uptime: {}, flips: {},
   sort: { key: 'store_id', dir: 'asc' },
-  filter: { q: '', status: 'all', type: 'all' },
+  filter: { q: '', status: 'all', type: 'all', category: 'all' },
   timer: null, charts: {}
 };
 
@@ -441,6 +458,18 @@ function log(msg, type='info') {
   const el = $('#apiLogs'); if (!el) return;
   const color = type === 'error' ? 'text-rose-400' : type === 'ok' ? 'text-emerald-400' : 'text-slate-300';
   el.innerHTML = `<div class="${color}">[${fmtTime(new Date())}] ${msg}</div>` + el.innerHTML;
+}
+
+// Tipos que representam "Loja Pai" (matriz). Qualquer outro tipo = Loja Filha.
+const STORE_TYPES_PAI = ['sao_paulo', 'pacheco', 'sao_paulo_turbo_nc'];
+function storeCategory(type) {
+  return STORE_TYPES_PAI.includes((type || '').toLowerCase()) ? 'Loja Pai' : 'Loja Filha';
+}
+function categoryBadge(type) {
+  const cat = storeCategory(type);
+  return cat === 'Loja Pai'
+    ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">Loja Pai</span>'
+    : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-700 font-semibold">Loja Filha</span>';
 }
 
 function normalizeStatus(v) {
@@ -832,6 +861,7 @@ function renderTable() {
   if (state.filter.status === 'divergent') rows = rows.filter(r => r.suggested != null && r.status != null && r.suggested !== r.status);
   if (state.filter.status === 'recent')    rows = rows.filter(r => r.lastChange && (Date.now() - new Date(r.lastChange).getTime() < 1000*60*30));
   if (state.filter.type !== 'all')         rows = rows.filter(r => (r.store_type||'') === state.filter.type);
+  if (state.filter.category !== 'all')     rows = rows.filter(r => storeCategory(r.store_type) === state.filter.category);
 
   const { key, dir } = state.sort;
   rows.sort((a,b) => {
@@ -851,6 +881,7 @@ function renderTable() {
       <td class="px-4 py-3 font-mono text-xs">${r.store_id}</td>
       <td class="px-4 py-3 font-medium">${r.store_name||'—'}</td>
       <td class="px-4 py-3 text-xs"><span class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700">${r.store_type||'—'}</span></td>
+      <td class="px-4 py-3">${categoryBadge(r.store_type)}</td>
       <td class="px-4 py-3">${statusBadge(r.status)}${divergentBadge}</td>
       <td class="px-4 py-3">${statusBadge(r.suggested)}</td>
       <td class="px-4 py-3">${statusBadge(r.prevStatus)}</td>
@@ -941,16 +972,39 @@ function renderCharts() {
     buckets[key] = (buckets[key]||0) + 1;
   });
   const tlLabels = Object.keys(buckets).sort();
-  const tlData = tlLabels.map(k => buckets[k]);
-  ['chartTimelineMini','chartTimeline'].forEach(id => {
-    const ctx = document.getElementById(id); if (!ctx) return;
-    destroyChart(id);
-    state.charts[id] = new Chart(ctx, {
+  const tlData   = tlLabels.map(k => buckets[k]);
+  const tlLabelsFmt = tlLabels.map(l => new Date(l).toLocaleString('pt-BR',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'}));
+
+  // Mini (dashboard): linha, compacto
+  const mini = document.getElementById('chartTimelineMini');
+  if (mini) {
+    destroyChart('chartTimelineMini');
+    state.charts.chartTimelineMini = new Chart(mini, {
+      type: 'line',
+      data: { labels: tlLabelsFmt, datasets: [{
+        label: 'Alterações', data: tlData,
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245,158,11,.18)',
+        fill: true, tension: .35, borderWidth: 2,
+        pointRadius: 3, pointHoverRadius: 5, pointBackgroundColor: '#f59e0b'
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    });
+  }
+  // Full (aba Gráficos): mantém barras
+  const full = document.getElementById('chartTimeline');
+  if (full) {
+    destroyChart('chartTimeline');
+    state.charts.chartTimeline = new Chart(full, {
       type: 'bar',
-      data: { labels: tlLabels.map(l => new Date(l).toLocaleString('pt-BR',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})), datasets: [{ label: 'Alterações', data: tlData, backgroundColor: '#f59e0b' }] },
+      data: { labels: tlLabelsFmt, datasets: [{ label: 'Alterações', data: tlData, backgroundColor: '#f59e0b' }] },
       options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
     });
-  });
+  }
 
   const dailyKeys = Object.keys(state.daily).sort().slice(-30);
   const dailyData = dailyKeys.map(k => state.daily[k]);
@@ -970,11 +1024,11 @@ function renderCharts() {
 // ============================================================
 function exportCSV() {
   if (!state.stores.length) return toast('Nada para exportar', 'warn');
-  const header = ['store_id','store_name','store_type','status_cms','suggested_state','prev_status','divergent','last_change','updated_at','uptime_pct','flips'];
+  const header = ['store_id','store_name','store_type','categoria','status_cms','suggested_state','prev_status','divergent','last_change','updated_at','uptime_pct','flips'];
   const rows = state.stores.map(s => {
     const div = s.suggested != null && s.status != null && s.suggested !== s.status ? 'TRUE' : 'FALSE';
     return [
-      s.store_id, s.store_name, s.store_type || '',
+      s.store_id, s.store_name, s.store_type || '', storeCategory(s.store_type),
       s.status === true ? 'TRUE' : s.status === false ? 'FALSE' : '',
       s.suggested === true ? 'TRUE' : s.suggested === false ? 'FALSE' : '',
       s.prevStatus === true ? 'TRUE' : s.prevStatus === false ? 'FALSE' : '',
@@ -990,6 +1044,7 @@ function exportXLSX() {
   if (!state.stores.length) return toast('Nada para exportar', 'warn');
   const data = state.stores.map(s => ({
     store_id: s.store_id, store_name: s.store_name, store_type: s.store_type || '',
+    categoria: storeCategory(s.store_type),
     status_cms: s.status === true ? 'TRUE' : s.status === false ? 'FALSE' : '',
     suggested_state: s.suggested === true ? 'TRUE' : s.suggested === false ? 'FALSE' : '',
     divergent: (s.suggested != null && s.status != null && s.suggested !== s.status) ? 'TRUE' : 'FALSE',
@@ -1160,7 +1215,8 @@ function bindUI() {
 
   $('#searchInput').addEventListener('input',  e => { state.filter.q      = e.target.value; renderTable(); });
   $('#filterStatus').addEventListener('change', e => { state.filter.status = e.target.value; renderTable(); });
-  $('#filterType') ?.addEventListener('change', e => { state.filter.type   = e.target.value; renderTable(); });
+  $('#filterType') ?.addEventListener('change', e => { state.filter.type     = e.target.value; renderTable(); });
+  $('#filterCategory')?.addEventListener('change', e => { state.filter.category = e.target.value; renderTable(); });
 
   $$('[data-sort]').forEach(th => th.addEventListener('click', () => {
     const k = th.dataset.sort;
