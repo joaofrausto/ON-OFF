@@ -57,12 +57,12 @@
   </div>
   <nav class="max-w-7xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto">
     <button data-tab="dashboard" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-blue-600 text-blue-600">Dashboard</button>
-    <button data-tab="upload"    class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">📤 Upload</button>
     <button data-tab="stores"    class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">Lojas</button>
     <button data-tab="history"   class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">Histórico</button>
     <button data-tab="charts"    class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">Gráficos</button>
     <button data-tab="settings"  class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">Configurações</button>
     <button data-tab="help"      class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">Ajuda</button>
+    <button data-tab="upload"    class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white">📤 Upload</button>
   </nav>
 </header>
 
@@ -72,17 +72,6 @@
 
   <!-- DASHBOARD -->
   <section data-panel="dashboard" class="tab-panel">
-    <div class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
-      <div class="flex items-center gap-3">
-        <div class="text-2xl">📤</div>
-        <div>
-          <p class="font-semibold">Carregue o arquivo do Redash</p>
-          <p class="text-xs opacity-90">Exporte como CSV/JSON e arraste para aqui. O painel detecta mudanças automaticamente.</p>
-        </div>
-      </div>
-      <button data-goto="upload" class="px-4 py-2 rounded-lg bg-white text-blue-700 text-sm font-medium hover:bg-blue-50">Abrir Upload</button>
-    </div>
-
     <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
       <div class="bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-700">
         <p class="text-xs uppercase tracking-wide text-slate-500">Total de lojas</p>
@@ -260,12 +249,13 @@ sao_paulo,900170951,"Drogaria São Paulo, 185",true,false</pre>
               <th class="px-4 py-3 text-left">Data/Hora</th>
               <th class="px-4 py-3 text-left">Store ID</th>
               <th class="px-4 py-3 text-left">Loja</th>
+              <th class="px-4 py-3 text-left">Categoria</th>
               <th class="px-4 py-3 text-left">Status antigo</th>
               <th class="px-4 py-3 text-left">Novo status</th>
             </tr>
           </thead>
           <tbody id="historyTbody">
-            <tr><td colspan="5" class="text-center py-12 text-slate-400">Nenhuma alteração registrada ainda.</td></tr>
+            <tr><td colspan="6" class="text-center py-12 text-slate-400">Nenhuma alteração registrada ainda.</td></tr>
           </tbody>
         </table>
       </div>
@@ -735,7 +725,7 @@ function applyNewSnapshot(rows) {
     if (prev && prev.status !== null && prev.status !== r.status) {
       item.lastChange = ts;
       item.prevStatus = prev.status;
-      changes.push({ ts, store_id: r.store_id, store_name: item.store_name, from: prev.status, to: r.status });
+      changes.push({ ts, store_id: r.store_id, store_name: item.store_name, store_type: item.store_type, from: prev.status, to: r.status });
       state.flips[r.store_id] = (state.flips[r.store_id] || 0) + 1;
     }
     newStores.push(item);
@@ -896,16 +886,22 @@ function renderTable() {
 function renderHistory() {
   const tb = $('#historyTbody');
   if (!state.history.length) {
-    tb.innerHTML = `<tr><td colspan="5" class="text-center py-12 text-slate-400">Nenhuma alteração registrada ainda.</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="6" class="text-center py-12 text-slate-400">Nenhuma alteração registrada ainda.</td></tr>`;
     return;
   }
-  tb.innerHTML = state.history.slice(0,200).map(h => `<tr class="border-t border-slate-100 dark:border-slate-700">
-    <td class="px-4 py-3 text-xs">${fmtDT(h.ts)}</td>
-    <td class="px-4 py-3 font-mono text-xs">${h.store_id}</td>
-    <td class="px-4 py-3">${h.store_name}</td>
-    <td class="px-4 py-3">${statusBadge(h.from)}</td>
-    <td class="px-4 py-3">${statusBadge(h.to)}</td>
-  </tr>`).join('');
+  // store_type pode não existir em entradas legadas: cai pra busca no snapshot atual
+  const typeById = Object.fromEntries(state.stores.map(s => [s.store_id, s.store_type]));
+  tb.innerHTML = state.history.slice(0,200).map(h => {
+    const t = h.store_type || typeById[h.store_id] || '';
+    return `<tr class="border-t border-slate-100 dark:border-slate-700">
+      <td class="px-4 py-3 text-xs">${fmtDT(h.ts)}</td>
+      <td class="px-4 py-3 font-mono text-xs">${h.store_id}</td>
+      <td class="px-4 py-3">${h.store_name}</td>
+      <td class="px-4 py-3">${categoryBadge(t)}</td>
+      <td class="px-4 py-3">${statusBadge(h.from)}</td>
+      <td class="px-4 py-3">${statusBadge(h.to)}</td>
+    </tr>`;
+  }).join('');
 }
 
 function renderRecentChanges() {
