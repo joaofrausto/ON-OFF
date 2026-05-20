@@ -328,6 +328,15 @@ sao_paulo,900170951,"Drogaria São Paulo, 185",true,false</pre>
           <label class="inline-flex items-center gap-2 text-sm">
             <input id="cfgCorsProxy" type="checkbox" class="rounded" /> Usar proxy CORS
           </label>
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input id="cfgForceRefresh" type="checkbox" class="rounded" /> Forçar execução da query (POST /refresh)
+          </label>
+        </div>
+
+        <div class="text-xs bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 text-amber-800 dark:text-amber-200 rounded-lg p-3">
+          🔁 <b>Cache do Redash:</b> por padrão, o endpoint <code>/results.json</code> retorna o último snapshot cacheado.
+          Marque "Forçar execução" para o painel disparar um POST em <code>/refresh</code> antes de cada busca, executando a query no momento. Funciona melhor com <b>User API Key</b> via <b>header</b>.
+          Alternativa mais limpa: configure um <b>Refresh Schedule</b> direto na query do Redash (ex: every 5 min).
         </div>
 
         <div class="text-xs bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 text-blue-800 dark:text-blue-200 rounded-lg p-3">
@@ -409,7 +418,7 @@ const state = {
   config: {
     url: '', apiKey: '', authMode: 'query', format: 'auto',
     interval: 60, autoRefresh: false, fetchOnOpen: false,
-    sound: false, corsProxy: false,
+    sound: false, corsProxy: false, forceRefresh: false,
     slack: '', discord: '', email: ''
   },
   stores: [], history: [], daily: {}, uptime: {}, flips: {},
@@ -527,8 +536,69 @@ function buildUrl() {
   if (key && state.config.authMode === 'query' && !url.includes('api_key=')) {
     url += (url.includes('?') ? '&' : '?') + 'api_key=' + encodeURIComponent(key);
   }
+  // Cache-busting: força o navegador/proxy a NÃO usar resposta cacheada
+  url += (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
   if (state.config.corsProxy) url = 'https://corsproxy.io/?' + encodeURIComponent(url);
   return url;
+}
+
+// Extrai o ID da query da URL configurada (para forçar refresh)
+function extractQueryId() {
+  const m = state.config.url.match(/\/queries\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+// Base do Redash (sem o /api/queries/...)
+function redashBase() {
+  const m = state.config.url.match(/^(https?:\/\/[^\/]+)/);
+  return m ? m[1] : null;
+}
+
+// Dispara POST /api/queries/{id}/refresh e espera o job terminar.
+// Só funciona se a User API Key for usada (com mode 'header').
+async function forceRedashRefresh() {
+  const qid = extractQueryId();
+  const base = redashBase();
+  if (!qid || !base) {
+    log('Não foi possível extrair o ID da query da URL.', 'error');
+    return false;
+  }
+  const key = (state.config.apiKey || API_KEY_FIXA).trim();
+  if (!key) {
+    log('Force refresh exige API Key (preferir User API Key).', 'error');
+    return false;
+  }
+
+  let refreshUrl = `${base}/api/queries/${qid}/refresh?_t=${Date.now()}`;
+  // Adiciona api_key na query string se for o modo (alguns Redash exigem)
+  if (state.config.authMode === 'query') refreshUrl += '&api_key=' + encodeURIComponent(key);
+  if (state.config.corsProxy) refreshUrl = 'https://corsproxy.io/?' + encodeURIComponent(refreshUrl);
+
+  log(`Forçando execução da query ${qid}...`);
+  try {
+    const r = await fetch(refreshUrl, { method: 'POST', cache: 'no-store', headers: buildHeaders() });
+    if (!r.ok) { log(`Refresh falhou: HTTP ${r.status}`, 'error'); return false; }
+    const data = await r.json();
+    const jobId = data?.job?.id;
+    if (!jobId) { log('Refresh aceito (sem job_id retornado).', 'ok'); return true; }
+    // Faz polling no job até terminar (status 3 = success, 4 = failed)
+    for (let i = 0; i < 30; i++) {
+      await new Promise(res => setTimeout(res, 1000));
+      let jobUrl = `${base}/api/jobs/${jobId}?_t=${Date.now()}`;
+      if (state.config.authMode === 'query') jobUrl += '&api_key=' + encodeURIComponent(key);
+      if (state.config.corsProxy) jobUrl = 'https://corsproxy.io/?' + encodeURIComponent(jobUrl);
+      const jr = await fetch(jobUrl, { cache: 'no-store', headers: buildHeaders() });
+      const jd = await jr.json();
+      const st = jd?.job?.status;
+      if (st === 3) { log(`✓ Query executada com sucesso`, 'ok'); return true; }
+      if (st === 4) { log(`✗ Query falhou no Redash: ${jd?.job?.error || ''}`, 'error'); return false; }
+    }
+    log('Timeout esperando a execução da query', 'error');
+    return false;
+  } catch (e) {
+    log(`Erro no force refresh: ${e.message}`, 'error');
+    return false;
+  }
 }
 
 function buildHeaders() {
@@ -545,6 +615,8 @@ function detectFormat(url) {
 }
 
 async function fetchWithRetry(url, opts={}, retries=3) {
+  // Garante que não há cache em nenhum fetch
+  opts = { cache: 'no-store', ...opts };
   for (let i = 0; i < retries; i++) {
     try {
       const r = await fetch(url, opts);
@@ -566,11 +638,15 @@ async function fetchWithRetry(url, opts={}, retries=3) {
 
 async function fetchFromRedash() {
   if (!state.config.url) { log('Nenhuma URL configurada.', 'error'); return null; }
+  setRefreshing(true);
+  // Se "Forçar execução" estiver ativo, força refresh antes de buscar
+  if (state.config.forceRefresh) {
+    await forceRedashRefresh();
+  }
   const url = buildUrl();
   const fmt = detectFormat(url);
   const headers = buildHeaders();
   log(`Buscando dados (${fmt.toUpperCase()})...`);
-  setRefreshing(true);
   try {
     const r = await fetchWithRetry(url, { headers });
     let rows;
@@ -1111,6 +1187,7 @@ function bindUI() {
       fetchOnOpen: $('#cfgFetchOnOpen').checked,
       sound:       $('#cfgSound').checked,
       corsProxy:   $('#cfgCorsProxy').checked,
+      forceRefresh:$('#cfgForceRefresh').checked,
       slack:       $('#cfgSlack').value.trim(),
       discord:     $('#cfgDiscord').value.trim(),
       email:       $('#cfgEmail').value.trim()
@@ -1153,6 +1230,7 @@ function populateConfigForm() {
   $('#cfgFetchOnOpen').checked = state.config.fetchOnOpen;
   $('#cfgSound').checked       = state.config.sound;
   $('#cfgCorsProxy').checked   = state.config.corsProxy;
+  $('#cfgForceRefresh').checked = state.config.forceRefresh;
   $('#cfgSlack').value         = state.config.slack;
   $('#cfgDiscord').value       = state.config.discord;
   $('#cfgEmail').value         = state.config.email;
